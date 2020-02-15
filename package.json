@@ -8,7 +8,9 @@
     "start": "parcel src/index.html",
     "build": "rm -rf deploy_build && parcel build -d deploy_build src/index.html && echo 'testnet-dczk.gwei.cz' > deploy_build/CNAME",
     "deploy": "num run build && npm run deploy-git",
-    "deploy-git": "rm -rf deploy_build/.git && cd deploy_build && git init && git remote add origin git@github.com:gweicz/gweicz.github.io.git && git checkout -b gh-pages && git add . && git commit -m 'update' && git push --set-upstream origin gh-pages --force"
+    "deploy-git-prepare": "rm -rf deploy_build/.git && cd deploy_build && git init && git remote add origin https://github.com/gweicz/dczk-frontend.git && git checkout -b gh-pages && git add . && git commit -m 'deploy'",
+    "deploy-git-push": "cd deploy_build && git push --set-upstream origin gh-pages --force",
+    "deploy-git": "npm run deploy-git-prepare && npm run deploy-git-push"
   },
   "author": "",
   "license": "ISC",
