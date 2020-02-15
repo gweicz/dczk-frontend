@@ -12,13 +12,13 @@ const versions = require('./versions')
 
 let currentVersion = Object.keys(versions)[0]
 
-const ERC20 = require('./abi/ERC20.json')
+const ERC20 = require('../dczk/abi/ERC20.json')
 const sourceLink = 'https://github.com/gweicz/dCZK/blob/master/contracts/DCZK.sol'
 
 const contracts = {
   DCZK: {},
   Pot: {
-    abi: require('./abi/Pot.json'),
+    abi: require('../dczk/abi/Pot.json'),
     address: '0xEA190DBDC7adF265260ec4dA6e9675Fd4f5A78bb'
   },
   DAI: {

@@ -1,3 +1,6 @@
 [submodule "dCZK"]
 	path = dCZK
 	url = git@github.com:gweicz/dCZK.git
+[submodule "dczk"]
+	path = dczk
+	url = git@github.com:gweicz/dczk.git
