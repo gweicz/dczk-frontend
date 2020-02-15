@@ -1,0 +1,3 @@
+[submodule "dCZK"]
+	path = dCZK
+	url = git@github.com:gweicz/dCZK.git
