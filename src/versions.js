@@ -1,5 +1,5 @@
 
-const dev = require('../../dczk/build/contracts/DCZK.json')
+//const dev = require('../../dczk/build/contracts/DCZK.json')
 module.exports = {
   /* '0.3': {
     net: 'Kovan',
