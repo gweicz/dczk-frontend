@@ -15,11 +15,17 @@ let currentVersion = Object.keys(versions)[0]
 const ERC20 = require('../dczk/abi/ERC20.json')
 const sourceLink = 'https://github.com/gweicz/dCZK/blob/master/contracts/DCZK.sol'
 
+const oracle = require('../dczk/builds/0.3/contracts/Oracle.json')
+
 const contracts = {
   DCZK: {},
   Pot: {
     abi: require('../dczk/abi/Pot.json'),
     address: '0xEA190DBDC7adF265260ec4dA6e9675Fd4f5A78bb'
+  },
+  Oracle: {
+    abi: oracle.abi,
+    address: oracle.networks['42'].address
   },
   DAI: {
     abi: ERC20,
@@ -109,6 +115,7 @@ class DCZK {
     this.accounts = accounts
     this.user = this.accounts[0]
     this.dczk = this._contract()
+    this.oracle = this._contract('Oracle')
     this.pot = this._contract('Pot')
     this.dai = this._contract('DAI')
     this.fee = 400
@@ -117,7 +124,8 @@ class DCZK {
     const sub = web3.eth.subscribe('logs', {
       address: [
         contracts.DCZK.address,
-        contracts.DAI.address
+        contracts.DAI.address,
+        contracts.Oracle.address
       ]
     }, (err, res) => {
       this.refresh()
@@ -214,8 +222,11 @@ class DCZK {
   }
 
   rateUpdates () {
+    if (!this.version || semver.lt(String('0.' + this.version), '0.0.3')) {
+      return null
+    }
     return web3.eth.getBlockNumber((err, block) => {
-      return this.dczk.getPastEvents('RateUpdate', { fromBlock: block - 10000 }, (err, logs) => {
+      return this.oracle.getPastEvents('Update', { fromBlock: block - 10000 }, (err, logs) => {
         return Promise.all(logs.map(l => {
           return web3.eth.getBlock(l.blockNumber).then(block => {
             return {
@@ -309,8 +320,11 @@ class DCZK {
   }
 
   priceWithoutFeeBN (n) {
+    if (!data.fee) {
+      return new this.BN('0')
+    }
     const val = new this.BN(this.toWei(n))
-    const fee = val.div(new this.BN(this.fee))
+    const fee = val.div(new this.BN((1 / data.fee) * 100))
     const rest = val.sub(fee)
     return rest
   }
@@ -419,19 +433,32 @@ class DCZK {
       this.dczk.methods.totalSupply().call((err, result) => { data.totalSupply = web3.utils.fromWei(result) }),
       this.dczk.methods.potSupply().call((err, result) => { data.potSupply = web3.utils.fromWei(result) }),
       this.dczk.methods.rate().call((err, result) => { data.rate = web3.utils.fromWei(result) }),
-      this.dczk.methods.totalVolume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) }),
+      new Promise(async () => {
+        if (this.version && semver.gte(String('0.' + this.version), '0.0.3')) {
+          await this.dczk.methods.volume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) })
+          await this.dczk.methods.cap().call((_, result) => { data.cap = web3.utils.fromWei(result) })
+        } else {
+          await this.dczk.methods.totalVolume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) })
+        }
+      }),
       this.dczk.methods.potDrip().call((err, result) => { data.potDrip = web3.utils.fromWei(result) }),
       this.pot.methods.dsr().call((err, result) => { data.savingRate = this._dsr(result) }),
       this.dai.methods.balanceOf(this.user).call((err, result) => { data.balances.DAI = web3.utils.fromWei(result) }),
       this.dai.methods.allowance(this.user, contracts.DCZK.address).call((err, result) => { data.allowances.DAI = web3.utils.fromWei(result) }),
       this.dczk.methods.balanceOf(this.user).call((err, result) => { data.balances.DCZK = web3.utils.fromWei(result) }),
       this.dczk.methods.allowance(this.user, contracts.DCZK.address).call((err, result) => { data.allowances.DCZK = web3.utils.fromWei(result) }),
-      new Promise(() => { data.fee = (1 / this.fee) * 100 }),
+      new Promise(() => {
+        if (this.version && semver.gte(String('0.' + this.version), '0.0.3')) {
+          return this.dczk.methods.fee().call((_, result) => { data.fee = (1 / result) * 100 })
+        } else {
+          data.fee = (1 / this.fee) * 100
+        }
+      }),
       web3.eth.getBalance(this.user).then(res => { data.balances.ETH = web3.utils.fromWei(res) }),
       this.dai.methods.balanceOf(contracts.DCZK.address).call((err, result) => { data.feeTreasury = web3.utils.fromWei(result) }),
       new Promise(() => {
         if (this.version && semver.gte(String('0.' + this.version), '0.0.1')) {
-          return this.dczk.methods.lastUpdate().call((err, result) => { data.lastUpdate = new Date(result * 1000) })
+          // return this.dczk.methods.lastUpdate().call((err, result) => { data.lastUpdate = new Date(result * 1000) })
         }
       })
     ]).then(() => m.redraw())
@@ -454,25 +481,23 @@ let dczk = null
 const maxAllowance = 100000000000000
 
 function changeVersion (e) {
-  resetData()
-  currentVersion = e.target.value
-  dczk = window.dczk = new DCZK(dczk.accounts, e.target.value)
-  dczk.init().then(ok => {
-    if (ok) {
-      dczk.refresh()
-    }
-    m.redraw()
-  })
+  const v = e.target.value
+  if (!versions[v] || v === currentVersion) {
+    return null
+  }
+  currentVersion = v
+  m.route.set(v === Object.keys(versions)[0] ? '/' : `/v/${v}`)
+  loadWeb3(v)
 }
 
-async function loadWeb3 () {
+async function loadWeb3 (version) {
   resetData()
   if (dczk) {
     await dczk.exit()
   }
   console.log('Web3 browser enabled')
   web3.eth.getAccounts((err, acc) => {
-    dczk = window.dczk = new DCZK(acc, currentVersion)
+    dczk = window.dczk = new DCZK(acc, version)
     dczk.init().then(ok => {
       if (ok) {
         dczk.refresh()
@@ -490,40 +515,42 @@ function changeAmount (type, amount) {
   }
 }
 
-window.addEventListener('load', () => {
-  // Modern dapp browsers...
-  if (window.ethereum) {
-    window.web3 = new Web3(ethereum)
-    try {
-      // Request account access if needed
-      ethereum.autoRefreshOnNetworkChange = false
-      ethereum.enable().then(() => {
-        loadWeb3()
-      })
-      ethereum.on('networkChanged', () => {
-        loadWeb3()
-      })
-      ethereum.on('accountsChanged', () => {
-        loadWeb3()
-      })
-      // Acccounts now exposed
-    } catch (error) {
-      // User denied account access...
-    }
-  } else if (window.web3) {
-    // Legacy dapp browsers...
-    window.web3 = new Web3(web3.currentProvider)
-    // Acccounts always exposed
-    loadWeb3()
-  } else {
-    // Non-dapp browsers...
-    noWeb3 = true
-    m.redraw()
-  }
-})
-
 const Page = {
-  view () {
+  oninit (vnode) {
+    const version = currentVersion = vnode.attrs.version || currentVersion
+    window.addEventListener('load', () => {
+      // Modern dapp browsers...
+      if (window.ethereum) {
+        window.web3 = new Web3(ethereum)
+        try {
+          // Request account access if needed
+          ethereum.autoRefreshOnNetworkChange = false
+          ethereum.enable().then(() => {
+            loadWeb3(version)
+          })
+          ethereum.on('networkChanged', () => {
+            loadWeb3(version)
+          })
+          ethereum.on('accountsChanged', () => {
+            loadWeb3(version)
+          })
+          // Acccounts now exposed
+        } catch (error) {
+          // User denied account access...
+        }
+      } else if (window.web3) {
+        // Legacy dapp browsers...
+        window.web3 = new Web3(web3.currentProvider)
+        // Acccounts always exposed
+        loadWeb3(version)
+      } else {
+        // Non-dapp browsers...
+        noWeb3 = true
+        m.redraw()
+      }
+    })
+  },
+  view (vnode) {
     return [
       m('.container', m({
         view () {
@@ -583,20 +610,14 @@ const Page = {
             ]),
             m('.tile.is-parent', [
               m('.tile.is-child.box', [
+                m('p.title', { title: data.cap }, data.cap ? num(data.cap, 0) + ' dCZK' : '..'),
+                m('p.subtitle', 'Maximální zásoba')
+              ])
+            ]),
+            m('.tile.is-parent', [
+              m('.tile.is-child.box', [
                 m('p.title', { title: data.potSupply }, data.potSupply ? num(data.potSupply) + ' DAI' : '..'),
                 m('p.subtitle', 'Celková rezerva')
-              ])
-            ]),
-            m('.tile.is-parent', [
-              m('.tile.is-child.box', [
-                m('p.title', { title: data.totalVolume }, data.totalVolume ? num(data.totalVolume) + ' dCZK' : '..'),
-                m('p.subtitle', 'Celkový objem obchodů')
-              ])
-            ]),
-            m('.tile.is-parent', [
-              m('.tile.is-child.box', [
-                m('p.title', { title: data.potDrip }, data.potDrip ? num(data.potDrip, 4) + ' DAI' : '..'),
-                m('p.subtitle', 'Nezaúčtovaná likvidita (drip)')
               ])
             ])
           ]),
@@ -621,11 +642,25 @@ const Page = {
                 m('p.title', data.fee ? (data.fee + '%') : '..'),
                 m('p.subtitle', 'Poplatek za vyražení dCZK')
               ])
+            ])
+          ]),
+          m('.tile.is-ancestor', [
+            m('.tile.is-parent', [
+              m('.tile.is-child.box', [
+                m('p.title', { title: data.totalVolume }, data.totalVolume ? num(data.totalVolume) + ' dCZK' : '..'),
+                m('p.subtitle', 'Celkový objem obchodů')
+              ])
             ]),
             m('.tile.is-parent', [
               m('.tile.is-child.box', [
                 m('p.title', data.feeTreasury ? num(data.feeTreasury) + ' DAI' : '..'),
                 m('p.subtitle', 'Truhla poplatků')
+              ])
+            ]),
+            m('.tile.is-parent', [
+              m('.tile.is-child.box', [
+                m('p.title', { title: data.potDrip }, data.potDrip ? num(data.potDrip, 4) + ' DAI' : '..'),
+                m('p.subtitle', 'Nezaúčtovaná likvidita (drip)')
               ])
             ])
           ])
@@ -750,7 +785,7 @@ const Page = {
                         state.buy ? m('p.help', [
                           'Kurz: ',
                           m('b', { title: rate }, num(rate, 4)),
-                          ' dCZK/DAI, včetně poplatku: 0.25%'
+                          ' dCZK/DAI, včetně poplatku: ' + data.fee + '%'
                         ]) : ''
                       ]
                     }
@@ -963,7 +998,7 @@ const Page = {
 }
 
 const Layout = {
-  view () {
+  view (vnode) {
     return m('div', [
       m('section.hero', [
         m('.hero-body', [
@@ -977,8 +1012,8 @@ const Layout = {
               ]),
               m('.level-right', [
                 m('.level-item', [
-                  m('.select', [
-                    m('select', { onchange: changeVersion, value: currentVersion }, Object.keys(versions).map(v => {
+                  m('.select.dczk-version', [
+                    m('select', { onchange: changeVersion, value: currentVersion, class: (currentVersion !== Object.keys(versions)[0] ? 'default' : '') }, Object.keys(versions).map(v => {
                       const d = versions[v]
                       return m('option', { value: v }, `Testnet [${d.net}] v${v}`)
                     }))
@@ -986,7 +1021,7 @@ const Layout = {
                 ])
               ])
             ]),
-            m(Page)
+            m(Page, vnode.attrs)
           ])
         ])
       ])
@@ -995,5 +1030,6 @@ const Layout = {
 }
 
 m.route(document.getElementById('dczk-dapp'), '/', {
-  '/': { render: vnode => m(Layout) }
+  '/': { render: vnode => m(Layout) },
+  '/v/:version': { render: vnode => m(Layout, Object.assign({}, vnode.attrs)) }
 })
