@@ -434,12 +434,14 @@ class DCZK {
       this.dczk.methods.potSupply().call((err, result) => { data.potSupply = web3.utils.fromWei(result) }),
       this.dczk.methods.rate().call((err, result) => { data.rate = web3.utils.fromWei(result) }),
       new Promise(async () => {
+        const a = []
         if (this.version && semver.gte(String('0.' + this.version), '0.0.3')) {
-          await this.dczk.methods.volume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) })
-          await this.dczk.methods.cap().call((_, result) => { data.cap = web3.utils.fromWei(result) })
+          a.push(this.dczk.methods.volume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) }))
+          a.push(this.dczk.methods.cap().call((_, result) => { data.cap = web3.utils.fromWei(result) }))
         } else {
-          await this.dczk.methods.totalVolume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) })
+          a.push(this.dczk.methods.totalVolume().call((err, result) => { data.totalVolume = web3.utils.fromWei(result) }))
         }
+        return Promise.all(a)
       }),
       this.dczk.methods.potDrip().call((err, result) => { data.potDrip = web3.utils.fromWei(result) }),
       this.pot.methods.dsr().call((err, result) => { data.savingRate = this._dsr(result) }),
